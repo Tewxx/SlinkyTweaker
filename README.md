@@ -39,4 +39,8 @@
 
 <p>GitHub Actions builds the EXE directly from this project's source code. You can review the source and <a href=".github/workflows/build.yml">build workflow</a> yourself to check what you're running and see how it's built.</p>
 
+<h2>Info</h2>
+
+<p>There are no automatic updates for the tweaker so if something breaks look back here for updated version. Slinky Tweaker does however auto download latest version of Slinky beta from Slinky's servers.</p>
+
 </div>
