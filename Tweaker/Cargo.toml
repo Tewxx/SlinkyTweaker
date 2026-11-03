@@ -1,0 +1,15 @@
+[package]
+name = "SlinkyTweaker"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+name = "SlinkyTweaker"
+crate-type = ["cdylib"]
+
+[dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info", "block_encoder"] }
+jni-simple = { version = "0.3.2", features = ["dynlink"] }
+
+[build-dependencies]
+cc = "1"

@@ -1,0 +1,13 @@
+pub const NEW_OBJECT: usize = 0xE0;
+pub const CALL_OBJECT: usize = 0x110;
+pub const CALL_BOOLEAN: usize = 0x128;
+pub const CALL_INT: usize = 0x188;
+pub const GET_OBJECT: usize = 0x2F8;
+pub const GET_BOOLEAN: usize = 0x300;
+pub const GET_INT: usize = 0x320;
+pub const GET_FLOAT: usize = 0x330;
+pub const GET_DOUBLE: usize = 0x338;
+pub const SET_INT: usize = 0x368;
+pub const CALL_STATIC_OBJECT: usize = 0x390;
+pub const CALL_STATIC_INT: usize = 0x408;
+pub const GET_ID: [usize; 4] = [0x108, 0x2F0, 0x388, 0x480];

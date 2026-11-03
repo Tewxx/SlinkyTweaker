@@ -1,0 +1,6 @@
+.cache/
+analysis/__pycache__/
+*.exe
+*.exe.old
+*.exe.tmp
+tweaker/SlinkyTweaker
