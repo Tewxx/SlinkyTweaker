@@ -1,12 +1,13 @@
 use crate::slinky::{self, SlinkyModule};
-use crate::{automap, gui, module, platform, Result};
+use crate::{automap, gui, module, platform, Error, Result};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
 type Register = fn(&SlinkyModule) -> Result<()>;
 
 const FEATURES: &[(&str, Register)] = &[
-    ("Auto Ladder", module::block::auto_ladder::register),
     ("Timer reset on input", module::movement::timer::register),
     ("Bed Plates", module::visual::bed_plates::register),
     ("Displace arrow", module::combat::displace::register),
@@ -34,21 +35,85 @@ fn scan_slinky(launcher: platform::Launcher) {
         located = SlinkyModule::locate();
     }
 
-    let Ok(module) = located else {
-        return;
+    let module = match located {
+        Ok(module) => module,
+        Err(error) => return report_startup_failure(&error),
     };
 
-    let failed: Vec<&str> = FEATURES
+    let failed: Vec<(&str, String)> = FEATURES
         .iter()
-        .filter(|&&(_, register)| register(&module).is_err())
-        .map(|&(name, _)| name)
+        .filter_map(|&(name, register)| {
+            match catch_unwind(AssertUnwindSafe(|| register(&module))) {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some((name, error.to_string())),
+                Err(_) => Some((name, "panicked during registration".to_string())),
+            }
+        })
         .collect();
 
+    let mut log = vec![format!("Slinky base {:#x}", module.base)];
+    if let Ok(map) = automap::get() {
+        log.push(format!(
+            "{} anchors, {} modules, {} events, manager layout {:x?}",
+            map.anchors.len(),
+            map.modules.len(),
+            map.events.len(),
+            map.manager_layout,
+        ));
+    }
+    log.extend(failed.iter().map(|(name, error)| format!("{name}: {error}")));
+    write_log(&log);
+
     thread::sleep(Duration::from_secs(2));
-    let message = match (automap::get(), failed.is_empty()) {
-        (Ok(map), true) => format!("Found {} Mappings", map.anchors.len()),
-        _ if failed.is_empty() => "Slinky Tweaker ready.".to_string(),
-        _ => format!("Unavailable: {}.", failed.join(", ")),
+    let names: Vec<&str> = failed.iter().map(|&(name, _)| name).collect();
+    let message = match (automap::get(), names.len()) {
+        (Ok(map), 0) => format!("Found {} Mappings", map.anchors.len()),
+        (_, 0) => "Slinky Tweaker ready.".to_string(),
+        (_, count) if count == FEATURES.len() => {
+            "All tweaker features unavailable. See .slinky\\tweaker.log".to_string()
+        }
+        _ => format!("Unavailable: {}.", names.join(", ")),
     };
-    let _ = slinky::notify_info(&module, &message);
+    if let Err(error) = slinky::notify_info(&message) {
+        log.push(format!("notification failed: {error}"));
+        write_log(&log);
+    }
+}
+
+fn report_startup_failure(error: &Error) {
+    let mut log = vec![format!("Startup failed: {error}")];
+    let summary = error.to_string();
+    let summary = summary.lines().next().unwrap_or_default();
+    let message = format!("Slinky Tweaker failed: {summary}");
+
+    let Some((base, size, name)) = automap::locate::find_slinky_module() else {
+        log.push("no loaded module matched Slinky".to_string());
+        return write_log(&log);
+    };
+    log.push(format!("Slinky module {name} base {base:#x} size {size:#x}"));
+    let shown = automap::image::Image::capture(base, size)
+        .and_then(|image| automap::resolve(&image))
+        .and_then(|map| {
+            log.push(format!(
+                "{} anchors, {} modules, {} events",
+                map.anchors.len(),
+                map.modules.len(),
+                map.events.len(),
+            ));
+            slinky::notify_with_map(&map, &message)
+        });
+    if let Err(error) = shown {
+        log.push(format!("notification failed: {error}"));
+    }
+    write_log(&log);
+}
+
+fn log_path() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("USERPROFILE")?).join(".slinky").join("tweaker.log"))
+}
+
+fn write_log(lines: &[String]) {
+    if let Some(path) = log_path() {
+        let _ = std::fs::write(path, lines.join("\n") + "\n");
+    }
 }

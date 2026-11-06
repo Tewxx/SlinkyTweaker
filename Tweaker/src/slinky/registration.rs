@@ -135,12 +135,13 @@ pub(crate) fn prepare_listeners(
     if callbacks.iter().any(|&(slot, _, _)| slot >= 27) {
         return Err(Error::Jvm("invalid custom listener slot".into()));
     }
+    let layout = crate::automap::module_manager::layout()?;
     let mut slots: Vec<usize> = callbacks.iter().map(|&(slot, _, _)| slot).collect();
     slots.sort_unstable();
     slots.dedup();
     let mut updates = Vec::new();
     for slot in slots {
-        let candidates_at = manager + 0x60 + slot * 0x10;
+        let candidates_at = manager + layout.candidates + slot * 0x10;
         let count = read_usize(candidates_at + 8, "listener candidate count")?;
         if count > 256 {
             return Err(Error::Jvm("unsupported listener candidate count".into()));
@@ -150,7 +151,7 @@ pub(crate) fn prepare_listeners(
             count,
             "listener candidates",
         )?;
-        let active_at = manager + 0x210 + slot * 8;
+        let active_at = manager + layout.active + slot * 8;
         let mut active = read_null_terminated_pointer_array(
             read_usize(active_at, "active listeners")?,
             256,
@@ -192,18 +193,22 @@ pub(crate) fn publish_listeners(base: usize, callbacks: &[(usize, usize, bool)])
 
 pub(crate) fn catalog_modules(base: usize) -> Result<Vec<usize>> {
     crate::automap::require(&["module_manager"])?;
-    let manager = base + crate::automap::rva("module_manager");
-    let count = read_usize(manager + 8, "module count")?;
+    let master = base
+        + crate::automap::rva("module_manager")
+        + crate::automap::module_manager::layout()?.master;
+    let count = read_usize(master + 8, "module count")?;
     if count > 1024 {
         return Err(Error::Jvm(format!("implausible module count {count}")));
     }
-    read_pointer_array(read_usize(manager, "module array")?, count, "modules")
+    read_pointer_array(read_usize(master, "module array")?, count, "modules")
 }
 
 pub(crate) fn active_listeners(base: usize, slot: usize) -> Result<usize> {
     crate::automap::require(&["module_manager"])?;
     read_usize(
-        base + crate::automap::rva("module_manager") + 0x210 + slot * 8,
+        base + crate::automap::rva("module_manager")
+            + crate::automap::module_manager::layout()?.active
+            + slot * 8,
         "active listeners",
     )
 }

@@ -8,12 +8,6 @@ use super::{image::Image, scan, Map};
 use iced_x86::{FlowControl, Instruction, Mnemonic, OpKind, Register};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const OWNERSHIP_REQUIRED: &[&str] = &[
-    "item_switch_claim",
-    "item_switch_release",
-    "item_switch_owner",
-];
-
 pub fn resolve(image: &Image, map: &mut Map) {
     let mut bodies = BTreeMap::new();
     let mut witnesses: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();

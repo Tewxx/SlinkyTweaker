@@ -14,19 +14,18 @@
 
 <table align="center">
   <tr>
-    <td align="center"><b>Auto Ladder</b></td>
     <td align="center"><b>Bed Plates</b></td>
     <td align="center"><b>Displace Arrow</b></td>
     <td align="center"><b>HUD Editor</b></td>
+    <td align="center"><b>Hide Modules</b></td>
   </tr>
   <tr>
-    <td align="center"><b>Hide Modules</b></td>
     <td align="center"><b>Mod Overlay Styling</b></td>
     <td align="center"><b>Custom Notification Name</b></td>
     <td align="center"><b>Timer Reset on Input</b></td>
+    <td align="center"><b>Removal of Slider value limits</b></td>
   </tr>
   <tr>
-    <td align="center"><b>Removal of Slider value limits</b></td>
     <td align="center"><b>Loader Animations</b></td>
   </tr>
 </table>

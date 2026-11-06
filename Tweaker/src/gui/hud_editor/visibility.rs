@@ -99,8 +99,9 @@ fn signature() -> u64 {
     GENERATION.load(Ordering::Relaxed)
 }
 
-fn category_at(manager: usize, category: usize) -> usize {
-    manager + 0x10 + category * 0x10
+fn category_at(manager: usize, category: usize) -> Option<usize> {
+    let layout = crate::automap::module_manager::layout().ok()?;
+    Some(manager + layout.categories + category * 0x10)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -129,7 +130,9 @@ pub(super) fn name(descriptor: usize) -> Option<String> {
 }
 
 pub(super) fn page(manager: usize, category: usize) -> Vec<(usize, String)> {
-    let at = category_at(manager, category);
+    let Some(at) = category_at(manager, category) else {
+        return Vec::new();
+    };
     let (Some(array), Some(count)) = (read_u64(at), read_u64(at + 8)) else {
         return Vec::new();
     };
@@ -178,7 +181,9 @@ pub(super) unsafe extern "system" fn gui_render(event: *mut c_void) {
     let signature = signature();
     let mut swapped = Vec::new();
     for category in 0..CATEGORIES.len() {
-        let at = category_at(manager, category);
+        let Some(at) = category_at(manager, category) else {
+            continue;
+        };
         let (Some(array), Some(count)) = (read_u64(at), read_u64(at + 8)) else {
             continue;
         };

@@ -75,9 +75,13 @@ pub fn initialize(base: usize, size: usize) -> Result<()> {
         };
     }
     let image = Image::capture(base, size)?;
-    let map = resolve(&image)?;
+    let mut map = resolve(&image)?;
     map.require(&["module_manager"])?;
-    module_manager::validate_live(&map)?;
+    map.manager_layout = Some(module_manager::resolve_layout(
+        &image,
+        &map,
+        &crate::slinky::mem::read_memory,
+    )?);
     MAPPING
         .set(map)
         .map_err(|_| Error::Jvm("automap initialized concurrently".into()))

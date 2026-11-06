@@ -1,6 +1,5 @@
 use super::{cache::Cache, *};
 mod input;
-mod place;
 mod timer;
 
 pub struct Game {

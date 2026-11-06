@@ -16,6 +16,7 @@ pub(crate) struct ModuleSpec<'a> {
 pub(crate) struct Catalog {
     template: usize,
     manager: usize,
+    layout: automap::module_manager::Layout,
     master: Vec<usize>,
 }
 
@@ -23,16 +24,19 @@ impl Catalog {
     pub fn open(base: usize, supported: RangeInclusive<usize>) -> Result<Self> {
         automap::require(&["module_manager", "block_in_module"])?;
         let manager = base + automap::rva("module_manager");
-        let count = read_usize(manager + 8, "module count")?;
+        let layout = automap::module_manager::layout()?;
+        let master_at = manager + layout.master;
+        let count = read_usize(master_at + 8, "module count")?;
         if !supported.contains(&count) {
             return Err(Error::Jvm(format!(
                 "unsupported Slinky module count {count} (expected {supported:?})"
             )));
         }
-        let master = read_pointer_array(read_usize(manager, "module array")?, count, "modules")?;
+        let master = read_pointer_array(read_usize(master_at, "module array")?, count, "modules")?;
         Ok(Self {
             template: base + automap::rva("block_in_module"),
             manager,
+            layout,
             master,
         })
     }
@@ -61,7 +65,8 @@ impl Catalog {
         self.master.push(descriptor);
         sort_modules(&mut self.master);
         let count = self.master.len();
-        let category_at = self.manager + 0x10 + spec.category * 0x10;
+        let master_at = self.manager + self.layout.master;
+        let category_at = self.manager + self.layout.categories + spec.category * 0x10;
         let mut category = read_pointer_array(
             read_usize(category_at, "category array")?,
             read_usize(category_at + 8, "category count")?,
@@ -71,14 +76,14 @@ impl Catalog {
         sort_modules(&mut category);
         let category_count = category.len();
         let mut writes = vec![
-            (self.manager, leak_pointer_array(self.master)),
+            (master_at, leak_pointer_array(self.master)),
             (category_at, leak_pointer_array(category)),
         ];
-        for (ptr_at, count_at) in [(0x2e8, 0x2f0), (0x2f8, 0x300)] {
+        for ptr_at in self.layout.pending {
             let mut pending = vec![0; count];
             copy_pointer_prefix(
                 read_usize(self.manager + ptr_at, "pending pointer")?,
-                read_usize(self.manager + count_at, "pending count")?,
+                read_usize(self.manager + ptr_at + 8, "pending count")?,
                 &mut pending,
                 "pending",
             )?;
@@ -86,7 +91,7 @@ impl Catalog {
         }
         writes.extend(prepare_listeners(self.manager, spec.callbacks)?);
         writes.push((category_at + 8, category_count));
-        writes.push((self.manager + 8, count));
+        writes.push((master_at + 8, count));
         Ok(PreparedModule { descriptor, writes })
     }
 }

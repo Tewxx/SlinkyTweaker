@@ -1,7 +1,6 @@
 mod combat;
 mod entity;
 mod input;
-mod inventory;
 
 mod world;
 
@@ -12,8 +11,6 @@ use jni_simple::JNIEnv;
 use std::{collections::BTreeMap, ffi::c_void, marker::PhantomData, rc::Rc};
 
 pub use input::Binding;
-
-pub use world::Hit;
 
 type Obj = *mut c_void;
 type Head = *mut c_void;
@@ -27,7 +24,7 @@ macro_rules! handle {
         }
     )*};
 }
-handle!(Stack, Item, Block, Key);
+handle!(Key);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Entity<'frame> {
@@ -258,20 +255,6 @@ impl<'frame> Game<'frame> {
             object
         )
     }
-    fn number(&self, name: &str, object: Obj) -> Result<f32> {
-        let value = native!(
-            self,
-            name,
-            unsafe extern "system" fn(Head, Obj) -> f32,
-            self.head,
-            object
-        )?;
-        if value.is_finite() {
-            Ok(value)
-        } else {
-            Err(Error::Jvm(format!("non-finite native value from {name}")))
-        }
-    }
     fn boolean(&self, name: &str, object: Obj) -> Result<bool> {
         let value = native!(
             self,
@@ -303,12 +286,6 @@ impl<'frame> Game<'frame> {
         } else {
             Err(Error::Jvm(format!("invalid native vector from {name}")))
         }
-    }
-    pub fn player(&self) -> Entity<'frame> {
-        Entity::as_player(self.player).expect("player checked at frame entry")
-    }
-    pub fn focused(&self) -> Result<bool> {
-        self.boolean("native_focus", self.minecraft)
     }
     pub fn angles(&self) -> Result<Angles> {
         Angles::from_packed(native!(

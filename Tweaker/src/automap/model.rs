@@ -40,6 +40,7 @@ pub struct Map {
     pub event_layout: Option<jni::EventLayout>,
     pub text_box: Option<super::text_box::TextBox>,
     pub native_silent_mode: Option<u32>,
+    pub manager_layout: Option<super::module_manager::Layout>,
 }
 
 impl Map {

@@ -1,17 +1,13 @@
-pub(crate) mod aim;
-pub(crate) mod blocks;
 pub(crate) mod game;
-pub(crate) mod hotbar;
 pub(crate) mod layout;
 pub(crate) mod mem;
 mod notify;
-pub(crate) mod place;
 pub(crate) mod registration;
 pub(crate) mod sections;
 pub(crate) mod settings;
 pub(crate) mod thunk;
 
-pub use notify::notify_info;
+pub use notify::{notify_info, notify_with_map};
 
 use crate::error::{Error, Result};
 
