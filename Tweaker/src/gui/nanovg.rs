@@ -4,6 +4,7 @@ use std::ffi::{c_char, c_int, c_void};
 
 pub const ALIGN_LEFT: i32 = 1;
 pub const ALIGN_CENTER: i32 = 2;
+pub const ALIGN_RIGHT: i32 = 4;
 pub const ALIGN_TOP: i32 = 8;
 pub const ALIGN_MIDDLE: i32 = 16;
 
@@ -15,9 +16,11 @@ pub const CCW: i32 = 1;
 const ANTIALIAS: c_int = 1;
 static INTER_MEDIUM: &[u8] = include_bytes!("../../assets/fonts/Inter-Medium.ttf");
 static INTER_BOLD: &[u8] = include_bytes!("../../assets/fonts/Inter-Bold.ttf");
+static ICONS: &[u8] = include_bytes!("../../assets/fonts/FontAwesome-Solid.ttf");
+const FONT_COUNT: usize = 3;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Color {
     pub r: f32,
     pub g: f32,
@@ -37,6 +40,19 @@ impl Color {
 pub enum Font {
     Medium,
     Bold,
+    Icons,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Paint {
+    xform: [f32; 6],
+    extent: [f32; 2],
+    radius: f32,
+    feather: f32,
+    inner: Color,
+    outer: Color,
+    image: c_int,
 }
 
 #[repr(C)]
@@ -48,6 +64,7 @@ struct Saved {
 }
 
 type Ctx = *mut c_void;
+const IMAGE_NEAREST: c_int = 1 << 5;
 extern "C" {
     fn nvgrs_load_gl() -> c_int;
     fn nvgrs_create(flags: c_int) -> Ctx;
@@ -86,6 +103,16 @@ extern "C" {
         bottom_left: f32,
     );
     fn nvgMoveTo(ctx: Ctx, x: f32, y: f32);
+    fn nvgCircle(ctx: Ctx, cx: f32, cy: f32, r: f32);
+    fn nvgCreateImageRGBA(ctx: Ctx, w: c_int, h: c_int, flags: c_int, data: *const u8) -> c_int;
+    fn nvgDeleteImage(ctx: Ctx, image: c_int);
+    fn nvgImagePattern(ctx: Ctx, ox: f32, oy: f32, ex: f32, ey: f32, angle: f32, image: c_int, alpha: f32) -> Paint;
+    fn nvgIntersectScissor(ctx: Ctx, x: f32, y: f32, w: f32, h: f32);
+    fn nvgFillPaint(ctx: Ctx, paint: Paint);
+    fn nvgLinearGradient(ctx: Ctx, sx: f32, sy: f32, ex: f32, ey: f32, inner: Color, outer: Color) -> Paint;
+    #[allow(clippy::too_many_arguments)]
+    fn nvgBoxGradient(ctx: Ctx, x: f32, y: f32, w: f32, h: f32, r: f32, f: f32, inner: Color, outer: Color) -> Paint;
+    fn nvgPathWinding(ctx: Ctx, dir: c_int);
     fn nvgLineTo(ctx: Ctx, x: f32, y: f32);
     fn nvgArc(ctx: Ctx, cx: f32, cy: f32, r: f32, a0: f32, a1: f32, dir: c_int);
     fn nvgClosePath(ctx: Ctx);
@@ -119,7 +146,7 @@ extern "C" {
 
 struct Canvas {
     ctx: Ctx,
-    fonts: [c_int; 2],
+    fonts: [c_int; FONT_COUNT],
 }
 impl Canvas {
     unsafe fn create() -> std::result::Result<Self, String> {
@@ -132,7 +159,7 @@ impl Canvas {
             nvgrs_save(&mut saved);
             let ctx = nvgrs_create(ANTIALIAS);
             let fonts = if ctx.is_null() {
-                [-1; 2]
+                [-1; FONT_COUNT]
             } else {
                 let load = |name: &[u8], data: &'static [u8]| {
                     nvgCreateFontMem(
@@ -146,6 +173,7 @@ impl Canvas {
                 [
                     load(b"inter\0", INTER_MEDIUM),
                     load(b"inter-bold\0", INTER_BOLD),
+                    load(b"tweaker-icons\0", ICONS),
                 ]
             };
             nvgrs_restore(&saved);
@@ -166,7 +194,7 @@ thread_local! {
 
 pub struct Frame<'a> {
     ctx: Ctx,
-    fonts: [c_int; 2],
+    fonts: [c_int; FONT_COUNT],
     own: Option<[f32; 2]>,
     _frame: std::marker::PhantomData<&'a ()>,
 }
@@ -211,6 +239,40 @@ impl Frame<'_> {
     }
     pub fn rounded_rect_varying(&mut self, x: f32, y: f32, w: f32, h: f32, [tl, tr, br, bl]: [f32; 4]) {
         unsafe { nvgRoundedRectVarying(self.ctx, x, y, w, h, tl, tr, br, bl) }
+    }
+    pub fn circle(&mut self, cx: f32, cy: f32, r: f32) {
+        unsafe { nvgCircle(self.ctx, cx, cy, r) }
+    }
+    pub fn intersect_scissor(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        unsafe { nvgIntersectScissor(self.ctx, x, y, w.max(0.0), h.max(0.0)) }
+    }
+    pub fn fill_paint(&mut self, paint: Paint) {
+        unsafe { nvgFillPaint(self.ctx, paint) }
+    }
+    pub fn linear_gradient(&mut self, [sx, sy]: [f32; 2], [ex, ey]: [f32; 2], inner: Color, outer: Color) -> Paint {
+        unsafe { nvgLinearGradient(self.ctx, sx, sy, ex, ey, inner, outer) }
+    }
+    pub fn box_gradient(&mut self, [x, y, w, h]: [f32; 4], radius: f32, feather: f32, inner: Color, outer: Color) -> Paint {
+        unsafe { nvgBoxGradient(self.ctx, x, y, w, h, radius, feather, inner, outer) }
+    }
+    pub fn path_winding(&mut self, dir: i32) {
+        unsafe { nvgPathWinding(self.ctx, dir) }
+    }
+    pub fn context_id(&self) -> usize {
+        self.ctx as usize
+    }
+    pub fn create_image_nearest(&mut self, w: i32, h: i32, rgba: &[u8]) -> Option<i32> {
+        if rgba.len() < (w * h * 4) as usize {
+            return None;
+        }
+        let image = unsafe { nvgCreateImageRGBA(self.ctx, w, h, IMAGE_NEAREST, rgba.as_ptr()) };
+        (image > 0).then_some(image)
+    }
+    pub fn delete_image(&mut self, image: i32) {
+        unsafe { nvgDeleteImage(self.ctx, image) }
+    }
+    pub fn image_pattern(&mut self, [x, y, w, h]: [f32; 4], image: i32, alpha: f32) -> Paint {
+        unsafe { nvgImagePattern(self.ctx, x, y, w, h, 0.0, image, alpha) }
     }
     pub fn move_to(&mut self, x: f32, y: f32) {
         unsafe { nvgMoveTo(self.ctx, x, y) }
@@ -398,10 +460,10 @@ pub fn glow(width: f32, height: f32, passes: i32, f: impl FnOnce(&mut Frame<'_>)
 }
 
 thread_local! {
-    static NATIVE_FONTS: RefCell<Vec<(usize, [c_int; 2])>> = const { RefCell::new(Vec::new()) };
+    static NATIVE_FONTS: RefCell<Vec<(usize, [c_int; FONT_COUNT])>> = const { RefCell::new(Vec::new()) };
 }
 
-fn native_fonts(ctx: *mut c_void) -> Result<[c_int; 2]> {
+fn native_fonts(ctx: *mut c_void) -> Result<[c_int; FONT_COUNT]> {
     NATIVE_FONTS.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some((_, fonts)) = cache.iter().find(|(c, _)| *c == ctx as usize) {
@@ -414,7 +476,11 @@ fn native_fonts(ctx: *mut c_void) -> Result<[c_int; 2]> {
             }
             nvgCreateFontMem(ctx, name.as_ptr().cast(), data.as_ptr().cast_mut(), data.len() as c_int, 0)
         };
-        let fonts = [font(b"inter\0", INTER_MEDIUM), font(b"inter-bold\0", INTER_BOLD)];
+        let fonts = [
+            font(b"inter\0", INTER_MEDIUM),
+            font(b"inter-bold\0", INTER_BOLD),
+            font(b"tweaker-icons\0", ICONS),
+        ];
         if fonts.iter().any(|&f| f < 0) {
             return Err(Error::Jvm("native NanoVG context has no usable fonts".into()));
         }

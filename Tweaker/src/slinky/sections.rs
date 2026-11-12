@@ -67,7 +67,7 @@ pub(crate) fn insert_before(
     Ok(copy)
 }
 
-fn callback_body(entry: usize) -> std::result::Result<Vec<Instruction>, String> {
+pub(crate) fn callback_body(entry: usize) -> std::result::Result<Vec<Instruction>, String> {
     const MAX: usize = 0x1000;
     let bytes = read_memory(entry, MAX).ok_or("callback unreadable")?;
     let mut decoder = Decoder::with_ip(64, &bytes, entry as u64, DecoderOptions::NONE);

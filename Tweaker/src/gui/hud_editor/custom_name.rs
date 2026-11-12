@@ -11,7 +11,6 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 const MODULE: &str = "Notifications";
-const DESCRIPTOR_GUI: usize = 0x1f8;
 const DEFAULT: &str = "SLINKY";
 const MAX_LENGTH: usize = 20;
 const ROW_H: f32 = 30.0;
@@ -74,7 +73,8 @@ pub(super) fn add_setting() -> Result<()> {
         .ok_or_else(|| Error::Jvm("Notifications is not mapped".into()))?;
     let next = map.address("layout_next")?;
     let descriptor = map.base + module.descriptor;
-    let gui = read_u64(descriptor + DESCRIPTOR_GUI)
+    let (gui_slot, _) = automap::callback_slots()?;
+    let gui = read_u64(descriptor + gui_slot)
         .map(|v| v as usize)
         .filter(|&v| v != 0)
         .ok_or_else(|| Error::Jvm("Notifications has no settings callback".into()))?;
@@ -84,8 +84,9 @@ pub(super) fn add_setting() -> Result<()> {
             next: unsafe { std::mem::transmute::<usize, NextFn>(next) },
         })
         .map_err(|_| Error::Jvm("Notifications additions exist".into()))?;
+    super::timewarp::register(descriptor, Some(gui), || super::timewarp::Extras { before: None, items: Vec::new() });
     let _threads = SuspendedThreads::suspend_others()?;
-    write_ptr(descriptor + DESCRIPTOR_GUI, panel as *const () as usize, "Notifications GUI")
+    write_ptr(descriptor + gui_slot, panel as *const () as usize, "Notifications GUI")
 }
 
 unsafe extern "system" fn panel(first: *mut c_void, second: *mut c_void) {
@@ -144,7 +145,7 @@ pub(super) fn update(mouse: Mouse, blocked: bool) -> bool {
     let drawn = state.drawn.take();
     let hovered = !blocked && mouse.inside && drawn.is_some_and(|r| r.contains(mouse.x, mouse.y));
     state.hovered = hovered;
-    let typed = input::take_typed();
+    let typed = if state.editing.is_some() { input::take_typed() } else { Vec::new() };
     if let Some(mut text) = state.editing.take() {
         let mut keep = drawn.is_none() || (mouse.left.pressed && !hovered);
         let mut cancel = false;
@@ -170,6 +171,9 @@ pub(super) fn update(mouse: Mouse, blocked: bool) -> bool {
     } else if hovered && mouse.left.pressed {
         state.editing = Some(shown(&state.name).to_string());
     }
-    input::set_typing(state.editing.is_some());
     hovered
+}
+
+pub(super) fn editing() -> bool {
+    state().editing.is_some()
 }

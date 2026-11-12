@@ -2,22 +2,24 @@ use super::{image::Image, Hook, Map, Module};
 use std::collections::BTreeMap;
 
 pub fn resolve(image: &Image, map: &mut Map) {
+    let layout = map.module_layout();
+    let span = layout.span();
     let mut candidates: BTreeMap<String, Vec<Module>> = BTreeMap::new();
     for section in image
         .sections
         .iter()
         .filter(|s| !s.executable && s.writable)
     {
-        for at in (section.range.start..section.range.end.saturating_sub(0x210)).step_by(8) {
+        for at in (section.range.start..section.range.end.saturating_sub(span)).step_by(8) {
             let Some(name) = image
-                .u64(at)
+                .u64(at + layout.name)
                 .and_then(|p| image.rva(p as usize))
                 .and_then(|r| image.cstr(r))
             else {
                 continue;
             };
             let Some(description) = image
-                .u64(at + 8)
+                .u64(at + layout.description)
                 .and_then(|p| image.rva(p as usize))
                 .and_then(|r| image.cstr(r))
             else {
@@ -26,11 +28,11 @@ pub fn resolve(image: &Image, map: &mut Map) {
             if !(description.ends_with('.') && description.len() >= 12 && name.len() <= 48) {
                 continue;
             }
-            if !image.data(at, 0x210, true) {
+            if !image.data(at, span, true) {
                 continue;
             }
             let category = image.u32(at + 0x10).unwrap_or(u32::MAX);
-            if category > 4 || image.read(at + 0x14, 1).is_none_or(|b| b[0] > 1) {
+            if category > 4 || image.read(at + layout.enabled, 1).is_none_or(|b| b[0] > 1) {
                 continue;
             }
             let mut valid = true;
@@ -58,7 +60,7 @@ pub fn resolve(image: &Image, map: &mut Map) {
                     Some(Some(image.rva(ptr).filter(|&r| image.executable(r))?))
                 }
             };
-            let (Some(gui_callback), Some(sync_callback)) = (callback(0x1f8), callback(0x200))
+            let (Some(gui_callback), Some(sync_callback)) = (callback(layout.gui), callback(layout.sync))
             else {
                 continue;
             };

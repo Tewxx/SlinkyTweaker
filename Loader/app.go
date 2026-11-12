@@ -191,6 +191,7 @@ func (a *app) runStepUpdate(ctx context.Context) (stepFunc, error) {
 	go func() {
 		if d, err := client.GetLicenseRemainingDuration(ctx); err == nil {
 			a.jobs <- func() error { a.licenseRemaining = d; return nil }
+			writeLicenseExpiry(d)
 		}
 	}()
 	libraryFile, err := getSlinkyDirFilePath(filepath.Join("bin", slinkyLibraryFilename), true)

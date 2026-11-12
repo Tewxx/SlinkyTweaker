@@ -11,8 +11,6 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 const MODULE: &str = "Knockback Displace";
-const DESCRIPTOR_GUI: usize = 0x1f8;
-const DESCRIPTOR_SYNC: usize = 0x200;
 
 type GuiFn = unsafe extern "system" fn(*mut c_void, *mut c_void);
 type SyncFn = unsafe extern "system" fn(*mut c_void);
@@ -68,13 +66,15 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
             .filter(|&v| v != 0)
             .ok_or_else(|| Error::Jvm("Knockback Displace has no settings callbacks".into()))
     };
-    let (gui, sync) = (callback(DESCRIPTOR_GUI)?, callback(DESCRIPTOR_SYNC)?);
+    let (gui_slot, sync_slot) = automap::callback_slots()?;
+    let (gui, sync) = (callback(gui_slot)?, callback(sync_slot)?);
     let settings = native_settings::create(
         module.base,
         [
             Spec::boolean("Render arrow", "render_arrow", true),
         ],
     )?;
+    let native_gui = gui;
     let customization =
         sections::insert_before(map, MODULE, gui, "Condition", c"Customization", &settings);
     let (gui, sectioned) = match customization {
@@ -91,6 +91,7 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
             sync: unsafe { std::mem::transmute::<usize, SyncFn>(sync) },
         })
         .map_err(|_| Error::Jvm("Knockback Displace additions exist".into()))?;
+    crate::gui::hud_editor::timewarp::register(descriptor, Some(native_gui), timewarp_extras);
     let click = map.event(Event::ClickPre)?;
     publish_listeners(
         module.base,
@@ -102,8 +103,24 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
         ],
     )?;
     let _threads = SuspendedThreads::suspend_others()?;
-    write_ptr(descriptor + DESCRIPTOR_GUI, gui_wrapper as *const () as usize, "Displace GUI")?;
-    write_ptr(descriptor + DESCRIPTOR_SYNC, sync_wrapper as *const () as usize, "Displace sync")
+    write_ptr(descriptor + gui_slot, gui_wrapper as *const () as usize, "Displace GUI")?;
+    write_ptr(descriptor + sync_slot, sync_wrapper as *const () as usize, "Displace sync")
+}
+
+fn timewarp_extras() -> crate::gui::hud_editor::timewarp::Extras {
+    use crate::gui::hud_editor::timewarp::{Extras, Item, Widget};
+    let Some(r) = RUNTIME.get() else {
+        return Extras { before: None, items: Vec::new() };
+    };
+    let settings = r.settings.iter().map(|s| Item::Setting(s.descriptor(), Widget::Bool));
+    if r.sectioned {
+        Extras {
+            before: Some("Condition"),
+            items: std::iter::once(Item::Section("Customization".into())).chain(settings).collect(),
+        }
+    } else {
+        Extras { before: None, items: settings.collect() }
+    }
 }
 
 unsafe extern "system" fn gui_wrapper(gui: *mut c_void, layout: *mut c_void) {

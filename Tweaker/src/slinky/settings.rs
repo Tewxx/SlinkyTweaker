@@ -22,6 +22,10 @@ pub(crate) enum Kind {
         mult: f32,
     },
     Color([f32; 3]),
+    Enum {
+        options: &'static [&'static str],
+        value: u32,
+    },
 }
 #[derive(Clone, Copy)]
 pub(crate) struct Spec {
@@ -70,6 +74,13 @@ impl Spec {
         }
         self
     }
+    pub const fn choice(label: &'static str, key: &'static str, options: &'static [&'static str], value: u32) -> Self {
+        Self {
+            label,
+            key,
+            kind: Kind::Enum { options, value },
+        }
+    }
     pub const fn color(label: &'static str, key: &'static str, rgb: [f32; 3]) -> Self {
         Self {
             label,
@@ -103,6 +114,12 @@ impl Setting {
             read_f32(self.descriptor + 0x10)?,
         ];
         rgb.iter().all(|v| v.is_finite()).then_some(rgb)
+    }
+    pub fn index(self) -> u32 {
+        read_u32(self.descriptor + 0x30).unwrap_or(0)
+    }
+    pub fn descriptor(self) -> usize {
+        self.descriptor
     }
 }
 
@@ -138,6 +155,16 @@ pub(crate) fn create_all(
                         "gui_float",
                     )
                 }
+                Kind::Enum { .. } => {
+                    automap::require(&["sync_enum", "gui_enum"])?;
+                    let map = automap::get()?;
+                    let template = map
+                        .setting("GUI", "scale")
+                        .filter(|s| s.kind == "enum")
+                        .ok_or_else(|| Error::Jvm("no enum setting to copy".into()))?
+                        .descriptor;
+                    (template, 0x40, "sync_enum", "gui_enum")
+                }
                 Kind::Color(_) => {
                     automap::require(&["accent_color", "sync_color", "gui_color"])?;
                     (
@@ -167,10 +194,10 @@ pub(crate) fn create_all(
 }
 
 fn initialize(d: &mut [u64], spec: Spec) -> Result<()> {
-    let label_at = if matches!(spec.kind, Kind::Color(_)) {
-        0
-    } else {
-        0x10
+    let label_at = match spec.kind {
+        Kind::Color(_) => 0,
+        Kind::Enum { .. } => 0x18,
+        _ => 0x10,
     };
     set_usize(d, label_at, leak_cstring(spec.label)?);
     match spec.kind {
@@ -195,6 +222,18 @@ fn initialize(d: &mut [u64], spec: Spec) -> Result<()> {
             set_f32(d, 0x2c, max);
             set_f32(d, 0x30, value);
             set_f32(d, 0x34, value);
+        }
+        Kind::Enum { options, value } => {
+            let names = options
+                .iter()
+                .map(|o| leak_cstring(o))
+                .collect::<Result<Vec<_>>>()?;
+            zero_range(d, 0, 0x18);
+            set_u32(d, 0x20, options.len() as u32);
+            set_usize(d, 0x28, leak_pointer_array(names));
+            set_u32(d, 0x30, value);
+            set_u32(d, 0x34, value);
+            zero_range(d, 0x38, 0x40);
         }
         Kind::Color(rgb) => {
             for (i, v) in rgb.into_iter().enumerate() {

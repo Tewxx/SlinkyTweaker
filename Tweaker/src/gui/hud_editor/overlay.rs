@@ -4,15 +4,20 @@ use super::{
     input::{self, Mouse},
     layout,
     module_edit::{self, ModuleEdit},
-    native, visibility, Runtime, HUD_ANIM, RUNTIME, VISIBLE,
+    native, timewarp, visibility, Runtime, HUD_ANIM, RUNTIME, VISIBLE,
 };
 use crate::gui::nanovg::{Color, Font, Frame, ALIGN_CENTER, ALIGN_LEFT, ALIGN_MIDDLE};
 use crate::gui::nanovg::{BUTT, MITER, ROUND};
 use crate::slinky::mem::{read_f32, read_flag, read_u32};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::{cell::RefCell, ffi::c_void, time::Instant};
 
 const SNAP_DISTANCE: f32 = 8.0;
+const GUI_NATIVE: u8 = 0;
+const GUI_SKIP: u8 = 1;
+const GUI_FILTERED: u8 = 2;
+static GUI_MODE: AtomicU8 = AtomicU8::new(GUI_NATIVE);
+static FALLBACK: AtomicBool = AtomicBool::new(false);
 const SEARCH_TAU: f32 = 0.06;
 const CLOSED_GAP: f32 = 0.25;
 const OPEN_DURATION: f32 = 0.3;
@@ -35,6 +40,8 @@ struct State {
     dt: f32,
     dragging: Option<&'static Element>,
     grab: [f32; 2],
+    timewarp: timewarp::Timewarp,
+    timewarp_on: bool,
 }
 impl State {
     fn new() -> Self {
@@ -48,6 +55,8 @@ impl State {
             dt: 0.0,
             dragging: None,
             grab: [0.0; 2],
+            timewarp: timewarp::Timewarp::default(),
+            timewarp_on: false,
         }
     }
 }
@@ -179,6 +188,7 @@ pub(super) unsafe extern "system" fn ui(event: *mut c_void) {
             state.frame(runtime, event);
         })
     }));
+    FALLBACK.store(result.is_err(), Ordering::Release);
     if result.is_err() {
         input::route(false, false);
         input::set_typing(false);
@@ -186,15 +196,32 @@ pub(super) unsafe extern "system" fn ui(event: *mut c_void) {
     }
 }
 
+pub(super) unsafe extern "system" fn gui_dispatch(event: *mut c_void) {
+    let Some(runtime) = RUNTIME.get() else {
+        return;
+    };
+    let styled = runtime.module_manager.is_some() && timewarp::active() && !FALLBACK.load(Ordering::Acquire);
+    match GUI_MODE.load(Ordering::Acquire) {
+        GUI_SKIP => {}
+        _ if styled => {}
+        GUI_FILTERED => unsafe { visibility::gui_render(event) },
+        _ => {
+            let native: unsafe extern "system" fn(*mut c_void) = unsafe { std::mem::transmute(runtime.gui_render) };
+            unsafe { native(event) }
+        }
+    }
+}
+
 fn swap_listeners(runtime: &Runtime, ours: bool, editing: bool, hiding: bool) {
     let skip = native::skip as *const () as usize;
     let filtered = visibility::gui_render as *const () as usize;
-    let gui = match (ours, editing, hiding) {
-        (false, ..) | (true, false, true) => runtime.gui_render,
-        (true, true, _) => skip,
-        (true, false, false) => filtered,
+    let mode = match (ours, editing, hiding) {
+        (false, ..) | (true, false, true) => GUI_NATIVE,
+        (true, true, _) => GUI_SKIP,
+        (true, false, false) => GUI_FILTERED,
     };
-    native::replace(runtime.base, &[runtime.gui_render, skip, filtered], gui);
+    GUI_MODE.store(mode, Ordering::Release);
+    native::replace(runtime.base, &[runtime.gui_render, skip, filtered], gui_dispatch as *const () as usize);
     if let Some(render) = runtime.mod_overlay_render {
         native::swap(runtime.base, render, arraylist::render as *const () as usize, ours);
     }
@@ -231,16 +258,45 @@ impl State {
                 self.hud_anim = 0.0;
             }
         }
+        let style = ready && !self.hud_editing && timewarp::active();
+        let fading = style && !gui_open && self.timewarp.visible();
+        let manager = runtime.module_manager.filter(|_| style && (gui_open || fading));
+        if manager.is_none() && (self.timewarp_on || self.timewarp.visible()) {
+            self.timewarp.reset();
+        }
+        self.timewarp_on = manager.is_some() && gui_open;
+        let keys = input::take_keys();
+        let wheel = input::take_wheel();
+        let extra = input::take_extra_buttons();
         let mut button_hot = false;
-        if let (true, Some(ctx), Some(screen)) = (gui_open, ctx, input::client_size()) {
+        let mut typing = false;
+        let mut close = false;
+        if let (true, Some(ctx), Some(screen)) = (gui_open || fading, ctx, input::client_size()) {
             let scale = gui_scale(runtime);
             let result = unsafe {
                 crate::gui::nanovg::draw_native(ctx, |vg| {
-                    let pages = runtime
-                        .gui_object
-                        .zip(runtime.module_manager)
-                        .filter(|_| visibility::ready());
-                    button_hot = self.draw(vg, mouse, screen, scale, pages);
+                    if let (Some(manager), false) = (manager, gui_open) {
+                        let input = timewarp::Input { mouse: Mouse::default(), wheel: 0.0, keys: Vec::new(), chars: Vec::new(), extra: 0 };
+                        self.timewarp.frame(vg, input, false, screen, scale, manager, self.dt);
+                    } else if let Some(manager) = manager {
+                        button_hot = self.draw_buttons(vg, mouse, screen, scale, 0.0, false);
+                        let mut pointer = mouse;
+                        if button_hot {
+                            pointer.left.pressed = false;
+                            pointer.right.pressed = false;
+                        }
+                        let chars = if custom_name::editing() { Vec::new() } else { input::take_typed() };
+                        let input = timewarp::Input { mouse: pointer, wheel, keys, chars, extra };
+                        let out = self.timewarp.frame(vg, input, true, screen, scale, manager, self.dt);
+                        typing = out.typing;
+                        close = out.close;
+                    } else {
+                        let pages = runtime
+                            .gui_object
+                            .zip(runtime.module_manager)
+                            .filter(|_| visibility::ready());
+                        button_hot = self.draw(vg, mouse, screen, scale, pages);
+                    }
                     Ok(())
                 })
             };
@@ -248,12 +304,21 @@ impl State {
                 self.hud_editing = false;
             }
         }
-        button_hot |= custom_name::update(mouse, button_hot || self.modules.on);
+        if close {
+            if let Some(manager) = manager {
+                timewarp::close(manager);
+            }
+            self.timewarp_on = false;
+            typing = false;
+        }
+        button_hot |= custom_name::update(mouse, button_hot || self.modules.on || self.timewarp_on);
+        input::set_typing(typing || custom_name::editing());
         if was_editing && !self.hud_editing {
             layout::save();
         }
-        swap_listeners(runtime, ready, self.hud_editing, self.modules.on);
-        input::route(self.hud_editing, button_hot);
+        let skip_native = self.hud_editing || (runtime.module_manager.is_some() && timewarp::active());
+        swap_listeners(runtime, ready, skip_native, self.modules.on && !skip_native);
+        input::route(self.hud_editing || self.timewarp_on, button_hot);
         VISIBLE.store(self.hud_editing || self.hud_anim > 0.0, Ordering::Release);
         HUD_ANIM.store(self.hud_anim.to_bits(), Ordering::Release);
     }

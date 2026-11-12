@@ -55,11 +55,16 @@ const REACH: usize = 0x4000_0000;
 static PAGES: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
 
 pub(crate) fn alloc_near(near: usize) -> std::result::Result<usize, String> {
+    alloc_near_size(near, PAGE)
+}
+
+pub(crate) fn alloc_near_size(near: usize, size: usize) -> std::result::Result<usize, String> {
+    let size = size.max(PAGE).next_multiple_of(PAGE);
     let origin = near & !(GRANULARITY - 1);
     for offset in (GRANULARITY..REACH).step_by(GRANULARITY) {
         for candidate in [origin.checked_add(offset), origin.checked_sub(offset)].into_iter().flatten() {
             let page = unsafe {
-                VirtualAlloc(candidate as *mut c_void, PAGE, MEM_COMMIT_RESERVE, PAGE_EXECUTE_READWRITE)
+                VirtualAlloc(candidate as *mut c_void, size, MEM_COMMIT_RESERVE, PAGE_EXECUTE_READWRITE)
             };
             if !page.is_null() {
                 return Ok(page as usize);

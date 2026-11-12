@@ -13,8 +13,6 @@ use std::thread;
 use std::time::Duration;
 
 const TIMER: &str = "Timer";
-const DESCRIPTOR_GUI: usize = 0x1f8;
-const DESCRIPTOR_SYNC: usize = 0x200;
 const POLL: Duration = Duration::from_millis(50);
 
 type GuiFn = unsafe extern "system" fn(*mut c_void, *mut c_void);
@@ -50,7 +48,8 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
             .filter(|&v| v != 0)
             .ok_or_else(|| Error::Jvm("Timer has no settings callbacks".into()))
     };
-    let (gui, sync) = (callback(DESCRIPTOR_GUI)?, callback(DESCRIPTOR_SYNC)?);
+    let (gui_slot, sync_slot) = crate::automap::callback_slots()?;
+    let (gui, sync) = (callback(gui_slot)?, callback(sync_slot)?);
     let update_slot = map.event(Event::PlayerUpdate)?;
     let tick_slot = map.event(Event::ClientTick)?;
     let [reset_on_input] = native_settings::create(
@@ -65,10 +64,11 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
             sync: unsafe { std::mem::transmute::<usize, SyncFn>(sync) },
         })
         .map_err(|_| Error::Jvm("Timer additions exist".into()))?;
+    crate::gui::hud_editor::timewarp::register(descriptor, Some(gui), timewarp_extras);
     {
         let _threads = SuspendedThreads::suspend_others()?;
-        write_ptr(descriptor + DESCRIPTOR_GUI, additions_gui as *const () as usize, "Timer GUI")?;
-        write_ptr(descriptor + DESCRIPTOR_SYNC, additions_sync as *const () as usize, "Timer sync")?;
+        write_ptr(descriptor + gui_slot, additions_gui as *const () as usize, "Timer GUI")?;
+        write_ptr(descriptor + sync_slot, additions_sync as *const () as usize, "Timer sync")?;
     }
     publish_listeners(
         module.base,
@@ -82,6 +82,15 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
         .spawn(poll)
         .map_err(|e| Error::Jvm(format!("Timer input poller: {e}")))?;
     Ok(())
+}
+
+fn timewarp_extras() -> crate::gui::hud_editor::timewarp::Extras {
+    use crate::gui::hud_editor::timewarp::{Extras, Item, Widget};
+    let items = ADDITIONS
+        .get()
+        .map(|a| vec![Item::Setting(a.reset_on_input.descriptor(), Widget::Bool)])
+        .unwrap_or_default();
+    Extras { before: None, items }
 }
 
 unsafe extern "system" fn additions_gui(gui: *mut c_void, layout: *mut c_void) {

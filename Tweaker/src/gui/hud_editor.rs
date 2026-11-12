@@ -7,6 +7,7 @@ mod native;
 mod notifications;
 mod module_edit;
 mod overlay;
+pub(crate) mod timewarp;
 mod values;
 mod visibility;
 
@@ -76,6 +77,7 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
         notifications::ELEMENT.register();
         let _ = custom_name::add_setting();
     }
+    let _ = timewarp::add_style_setting(module.base);
     if let (Some(manager), Some(_)) = (runtime.module_manager, runtime.gui_object) {
         let _ = visibility::setup(manager);
     }
@@ -83,6 +85,7 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
     RUNTIME
         .set(runtime)
         .map_err(|_| Error::Jvm("HUD editor runtime exists".into()))?;
+    let _ = native::take_over(module.base, "GUI", gui_render, overlay::gui_dispatch as *const () as usize);
     if let Some(render) = notifications_render {
         let ours = notifications::render as *const () as usize;
         let _ = native::take_over(module.base, "Notifications", render, ours);

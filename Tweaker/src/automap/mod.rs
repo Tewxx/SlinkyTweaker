@@ -9,12 +9,14 @@ pub mod gui;
 pub mod hotbar;
 pub mod image;
 pub mod jni;
+pub mod layout;
 pub(crate) mod locate;
 mod model;
 pub mod module_manager;
 pub mod native_attack_input;
 pub mod natives;
 pub mod notifications;
+pub mod profiles;
 pub mod rotations;
 pub mod scan;
 pub mod settings;
@@ -40,8 +42,12 @@ pub fn resolve(image: &Image) -> Result<Map> {
         image_size: image.bytes.len(),
         ..Map::default()
     };
+    map.layout.module = layout::resolve_module(image, &mut map);
     catalog::resolve(image, &mut map);
     module_manager::resolve(image, &mut map);
+    if !layout::module_valid(image, &map) {
+        map.layout.module = None;
+    }
     if map.modules.len() < 10 {
         return Err(Error::Jvm(
             "automap: module descriptors not initialized yet".into(),
@@ -51,6 +57,7 @@ pub fn resolve(image: &Image) -> Result<Map> {
     block_in::resolve(&mut map);
     settings::resolve(image, &mut map);
     gui::resolve(image, &mut map);
+    layout::resolve_settings(image, &mut map);
     text_box::resolve(image, &mut map);
     accent_color::resolve(&mut map);
     rotations::resolve(image, &mut map);
@@ -61,6 +68,7 @@ pub fn resolve(image: &Image) -> Result<Map> {
     displace::resolve(image, &mut map);
     hotbar::resolve(image, &mut map);
     font::resolve(image, &mut map);
+    profiles::resolve(image, &mut map);
     Ok(map)
 }
 
@@ -94,6 +102,16 @@ pub fn get() -> Result<&'static Map> {
 }
 pub fn require(names: &[&str]) -> Result<()> {
     get()?.require(names)
+}
+
+pub fn module_layout() -> Result<layout::ModuleLayout> {
+    get()?
+        .layout
+        .module
+        .ok_or_else(|| Error::Jvm("automap: module descriptor layout not derived".into()))
+}
+pub fn callback_slots() -> Result<(usize, usize)> {
+    module_layout().map(|l| (l.gui, l.sync))
 }
 
 pub(crate) fn rva(name: &str) -> usize {

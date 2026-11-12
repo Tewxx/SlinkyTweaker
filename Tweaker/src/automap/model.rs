@@ -41,6 +41,7 @@ pub struct Map {
     pub text_box: Option<super::text_box::TextBox>,
     pub native_silent_mode: Option<u32>,
     pub manager_layout: Option<super::module_manager::Layout>,
+    pub layout: super::layout::Layout,
 }
 
 impl Map {
@@ -98,6 +99,9 @@ impl Map {
             )))
         }
     }
+    pub fn module_layout(&self) -> super::layout::ModuleLayout {
+        self.layout.module.unwrap_or(super::layout::ModuleLayout::KNOWN)
+    }
     pub fn setting(&self, module: &str, key: &str) -> Option<&Setting> {
         self.modules.get(module)?.settings.get(key)
     }
@@ -120,6 +124,6 @@ impl Setting {
 }
 impl Module {
     pub fn enabled_address(&self, map: &Map) -> usize {
-        map.base + self.descriptor + 0x14
+        map.base + self.descriptor + map.module_layout().enabled
     }
 }

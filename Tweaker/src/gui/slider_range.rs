@@ -1,4 +1,4 @@
-use crate::automap::{self, text_box::TextBox, Event};
+use crate::automap::{self, layout::FloatLayout, text_box::TextBox, Event};
 use crate::slinky::mem::{read_cstr, read_f32, read_u32, read_u64, write_f32};
 use crate::slinky::registration::{publish_listeners, write_ptr, SuspendedThreads};
 use crate::slinky::settings::{self, UNCLAMPED};
@@ -10,18 +10,12 @@ use std::ffi::c_void;
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 
-const DESCRIPTOR_SYNC: usize = 0x200;
-const STEP: usize = 0x20;
-const MULT: usize = 0x24;
-const MIN: usize = 0x28;
-const MAX: usize = 0x2c;
-const VALUE: usize = 0x30;
-
 type SyncFn = unsafe extern "system" fn(*mut c_void);
 type ChangedFn = unsafe extern "system" fn(u8);
 
 struct Runtime {
     text_box: TextBox,
+    float: FloatLayout,
     floats: HashSet<usize>,
     changed: Option<ChangedFn>,
 }
@@ -33,6 +27,11 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
     let text_box = map
         .text_box
         .ok_or_else(|| Error::Jvm("the GUI text box is not mapped".into()))?;
+    let float = map
+        .layout
+        .float
+        .ok_or_else(|| Error::Jvm("the float setting layout is not derived".into()))?;
+    let (_, sync_slot) = automap::callback_slots()?;
     let mut floats = HashSet::new();
     let mut writes = Vec::new();
     for native in map.modules.values() {
@@ -46,7 +45,7 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
             continue;
         }
         floats.extend(&descriptors);
-        let slot = map.base + native.descriptor + DESCRIPTOR_SYNC;
+        let slot = map.base + native.descriptor + sync_slot;
         let Some(original) = read_u64(slot).map(|v| v as usize).filter(|&v| v != 0) else {
             continue;
         };
@@ -71,6 +70,7 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
     RUNTIME
         .set(Runtime {
             text_box,
+            float,
             floats,
             changed: map
                 .address("settings_changed")
@@ -109,7 +109,7 @@ unsafe extern "system" fn frame(_event: *mut c_void) {
         .then(|| read_u64(gui + tb.target))
         .flatten()
         .map(|t| t as usize)
-        .filter(|&t| t > VALUE && is_float(r, t - VALUE));
+        .filter(|&t| t > r.float.value && is_float(r, t - r.float.value));
     let mut editing = EDITING.lock().unwrap_or_else(|e| e.into_inner());
     if target.is_some() {
         *editing = target;
@@ -119,14 +119,14 @@ unsafe extern "system" fn frame(_event: *mut c_void) {
         return;
     };
     if let Some(text) = read_cstr(gui + tb.text, 0x60) {
-        submitted(r, value - VALUE, &text);
+        submitted(r, value - r.float.value, &text);
     }
 }
 
 fn submitted(r: &Runtime, descriptor: usize, text: &str) {
     let field = |offset| read_f32(descriptor + offset);
     let (Some(step), Some(mult), Some(min), Some(max), Some(value)) =
-        (field(STEP), field(MULT), field(MIN), field(MAX), field(VALUE))
+        (field(r.float.step), field(r.float.mult), field(r.float.min), field(r.float.max), field(r.float.value))
     else {
         return;
     };
@@ -138,7 +138,7 @@ fn submitted(r: &Runtime, descriptor: usize, text: &str) {
     if value != clamped {
         return;
     }
-    write_f32(descriptor + VALUE, typed);
+    write_f32(descriptor + r.float.value, typed);
     if let Some(changed) = r.changed {
         unsafe { changed(1) };
     }

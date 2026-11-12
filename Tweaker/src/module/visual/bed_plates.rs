@@ -50,6 +50,7 @@ pub fn register(module: &SlinkyModule) -> Result<()> {
             settings,
         })
         .map_err(|_| Error::Jvm("Bed Plates runtime exists".into()))?;
+    crate::gui::hud_editor::timewarp::register(prepared.descriptor, None, settings::timewarp_extras);
     prepared.publish()
 }
 
@@ -75,6 +76,17 @@ mod settings {
                 Spec::boolean("Highlight bed", "highlight", true),
             ],
         )
+    }
+    pub(super) fn timewarp_extras() -> crate::gui::hud_editor::timewarp::Extras {
+        use crate::gui::hud_editor::timewarp::{Extras, Item, Widget};
+        let Some(r) = RUNTIME.get() else {
+            return Extras { before: None, items: Vec::new() };
+        };
+        let kinds = [Widget::Bool, Widget::Bool, Widget::Float, Widget::Float, Widget::Bool, Widget::Bool];
+        let items = std::iter::once(Item::Section("Main".into()))
+            .chain(r.settings.iter().zip(kinds).map(|(s, w)| Item::Setting(s.descriptor(), w)))
+            .collect();
+        Extras { before: None, items }
     }
     pub fn flag(i: usize) -> bool {
         RUNTIME.get().is_some_and(|r| r.settings[i].flag())

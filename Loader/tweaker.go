@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,4 +85,13 @@ func lockTweakerTemp(ctx context.Context, root string) (func(), error) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func writeLicenseExpiry(remaining time.Duration) {
+	root := filepath.Join(os.TempDir(), "SlinkyTweaker")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return
+	}
+	expiry := time.Now().Add(remaining).Unix()
+	_ = os.WriteFile(filepath.Join(root, "license"), []byte(strconv.FormatInt(expiry, 10)), 0o600)
 }
