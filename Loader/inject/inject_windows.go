@@ -24,6 +24,7 @@ var (
 	errModuleNotFound            = errors.New("module not found")
 	user32                       = windows.MustLoadDLL("user32.dll")
 	procFindWindowW              = user32.MustFindProc("FindWindowW")
+	procFindWindowExW            = user32.MustFindProc("FindWindowExW")
 	procGetWindowThreadProcessId = user32.MustFindProc("GetWindowThreadProcessId")
 	kernel32                     = windows.MustLoadDLL("kernel32.dll")
 	procOpenProcess              = kernel32.MustFindProc("OpenProcess")
@@ -52,18 +53,112 @@ func findMinecraftWindowFromClass(class string) (uintptr, error) {
 }
 
 func FindMinecraft() (Process, error) {
-	var p Process
-	hwnd, err := findMinecraftWindowFromClass("LWJGL")
-	if err == errMinecraftNotFound {
-		hwnd, err = findMinecraftWindowFromClass("GLFW30")
-		if err != nil {
-			return p, err
+	for _, class := range []string{"LWJGL", "GLFW30"} {
+		hwnd, err := findMinecraftWindowFromClass(class)
+		if errors.Is(err, errMinecraftNotFound) {
+			continue
 		}
+		if err != nil {
+			return Process{}, err
+		}
+		return processFromWindow(hwnd)
 	}
-	if result, _, err := procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&p.pid))); result == 0 {
-		return p, err
+	return findSDLMinecraft()
+}
+
+func processFromWindow(hwnd uintptr) (Process, error) {
+	var p Process
+	result, _, _ := procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&p.pid)))
+	if result == 0 || p.pid == 0 {
+		return Process{}, errors.New("window no longer has a process")
 	}
 	return p, nil
+}
+
+func findSDLMinecraft() (Process, error) {
+	class, err := windows.UTF16PtrFromString("SDL_app")
+	if err != nil {
+		return Process{}, err
+	}
+	seen := make(map[uint32]bool)
+	var previous uintptr
+	var firstErr error
+	for {
+		hwnd, _, _ := procFindWindowExW.Call(0, previous, uintptr(unsafe.Pointer(class)), 0)
+		if hwnd == 0 {
+			break
+		}
+		previous = hwnd
+		p, err := processFromWindow(hwnd)
+		if err != nil {
+			continue
+		}
+		if seen[p.pid] {
+			continue
+		}
+		seen[p.pid] = true
+		matches, err := p.hasJavaGameRuntime()
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("checking SDL process %d: %w", p.pid, err)
+			}
+			continue
+		}
+		if matches {
+			return p, nil
+		}
+	}
+	if firstErr != nil {
+		return Process{}, firstErr
+	}
+	return Process{}, errMinecraftNotFound
+}
+
+func (p Process) hasJavaGameRuntime() (bool, error) {
+	snap, err := snapshotModules(p.pid)
+	if err != nil {
+		return false, err
+	}
+	defer windows.CloseHandle(snap)
+	entry := windows.ModuleEntry32{Size: uint32(unsafe.Sizeof(windows.ModuleEntry32{}))}
+	if err := windows.Module32First(snap, &entry); err != nil {
+		if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+			return false, nil
+		}
+		return false, fmt.Errorf("iterating modules: %w", err)
+	}
+	var jvm, lwjgl bool
+	for {
+		switch strings.ToLower(windows.UTF16ToString(entry.Module[:])) {
+		case "jvm.dll":
+			jvm = true
+		case "lwjgl.dll", "lwjgl64.dll":
+			lwjgl = true
+		}
+		if jvm && lwjgl {
+			return true, nil
+		}
+		if err := windows.Module32Next(snap, &entry); err != nil {
+			if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+				return false, nil
+			}
+			return false, fmt.Errorf("iterating modules: %w", err)
+		}
+	}
+}
+
+func snapshotModules(pid uint32) (windows.Handle, error) {
+	for i := 0; i < 100; i++ {
+		snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPMODULE, pid)
+		if errors.Is(err, windows.ERROR_BAD_LENGTH) {
+			continue
+		}
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return 0, ErrAccessDenied
+		}
+		return snap, err
+	}
+	return 0, windows.ERROR_BAD_LENGTH
 }
 
 func (p Process) Inject(libraryPath, authBlob string) error {
@@ -198,17 +293,9 @@ func (p Process) init(h windows.Handle, base uintptr, authBlob string) error {
 }
 
 func (p Process) findLibBase(libraryPath string) (uintptr, error) {
-	var snap windows.Handle
-	for i := 0; i < 100; i++ {
-		var err error
-		snap, err = windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPMODULE, p.pid)
-		if err == windows.ERROR_BAD_LENGTH {
-			continue
-		}
-		if err != nil {
-			return 0, fmt.Errorf("snapshot failed: %w", err)
-		}
-		break
+	snap, err := snapshotModules(p.pid)
+	if err != nil {
+		return 0, fmt.Errorf("snapshot failed: %w", err)
 	}
 	defer windows.CloseHandle(snap)
 	entry := windows.ModuleEntry32{Size: uint32(unsafe.Sizeof(windows.ModuleEntry32{}))}

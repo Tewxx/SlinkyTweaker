@@ -40,6 +40,8 @@ Push-Location $PSScriptRoot
 try {
     & $GoExe build -trimpath -buildvcs=false -ldflags '-s -w' -o $outputFullPath .
     if ($LASTEXITCODE -ne 0) { throw 'Go build failed.' }
+    & icacls.exe $outputFullPath /setintegritylevel Medium | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Could not set normal Medium integrity on the loader. Run this script outside the sandbox.' }
     Write-Output ('Built ' + $outputFullPath)
     Get-FileHash -LiteralPath $outputFullPath -Algorithm SHA256
 } finally {
